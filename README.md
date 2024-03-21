@@ -1,4 +1,6 @@
-*I can no longer develop or test this tool. feel free to fork it if you need a new feature. I could still answer questions or upload files I forgot though.*
+Forked from https://github.com/AvatarBecker/USB2MDIO_PY to fix some bugs and maybe improve some things.
+
+Thank you for building this - it has been immensely useful!  :-)
 
 ## USB2MDIO_PY
 
@@ -10,6 +12,10 @@ Therefore I decided (needed) to write a small tool to substitute it and used the
 
 An expanded script syntax was created to permit changing the PHY and batching multiple scripts.
 A script can be passed directly to the command via bash, or via the commands CLI.
+
+## Installation
+
+Install python3 & pyserial (pip install pyserial).
 
 ## Usage
 
