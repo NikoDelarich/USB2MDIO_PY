@@ -94,10 +94,10 @@ For more documentation check https://github.com/AvatarBecker/USB2MDIO_PY
 
 # TODO: make it a config class, with description, name, and value. Easens pretty print and feedback on change.
 pretty_print = False
-phy_addr = 10   # this is a decimal value
+phy_addr = -1   # this is a decimal value
 regs_dict = {}  # index reg struct with phy_addr
 
-ext = '*'  # extended registers. Yes: '*', No: '='
+ext = '='  # extended registers. Yes: '*', No: '='
 ext_dict = {
     '*': 'yes',
     '=': 'no'
@@ -117,21 +117,11 @@ def PrintRaw(str):
         print(hex(ord(char)), end=' ')
     print()
 
-def ReadBackReg(addr):
-    pkt_reply = com_port.read(6)
-    #PrintRaw(pkt_reply.decode('utf-8'))
-
-    pkt_reply = [i for i in pkt_reply if i != 0xd]   # for whatever reason, MSP sends a carriage return within reply for addr 0x1
-    pkt_reply = bytes(pkt_reply)
-
+def PrintRegResult(addr, pkt_reply):
     if(pkt_reply[4] == 0x0a):
-        
         data_str = pkt_reply[0:4].decode('utf-8')
-        
         if(data_str):
-            
             if(pretty_print):
-                
                 if(phy_addr in regs_dict.keys()):
                     value = int(data_str, 16)
                     cr.PrintRegPretty(regs_dict[phy_addr], addr, value)
@@ -147,6 +137,18 @@ def ReadBackReg(addr):
     else:
         print("Invalid reply...")
 
+def ReadBackReg(addr):
+    while(1):
+        pkt_reply = com_port.read(6)
+        if(len(pkt_reply) == 6):
+            break
+        time.sleep(0.05)
+    #PrintRaw(pkt_reply.decode('utf-8'))
+
+    pkt_reply = [i for i in pkt_reply if i != 0xd]   # for whatever reason, MSP sends a carriage return within reply for addr 0x1
+    pkt_reply = bytes(pkt_reply)
+    return pkt_reply
+
 def WriteReg(com_port, phy_addr, addr, value, ext):
     # flush input (board keeps seding verbose)
     #com_port.reset_input_buffer() # too slow
@@ -157,14 +159,18 @@ def WriteReg(com_port, phy_addr, addr, value, ext):
     #PrintRaw(pkt_request)
     pkt_request = pkt_request.encode('utf-8')
 
+    # flush data
+    com_port.read(350)
+
     # write it
     com_port.write(pkt_request)
 
     # read back value and print it
     print("wr reg 0x", f'{addr:04x}', ": ",  sep='', end='')
-    ReadBackReg(addr)
+    pkt_reply = ReadBackReg(addr)
+    PrintRegResult(addr, pkt_reply)
 
-def ReadReg(com_port, phy_addr, addr, ext):
+def ReadReg(com_port, phy_addr, addr, ext, quiet = False):
     
     # flush input (board keeps seding verbose)
     #com_port.reset_input_buffer() # too slow
@@ -175,12 +181,15 @@ def ReadReg(com_port, phy_addr, addr, ext):
     #PrintRaw(pkt_request)
     pkt_request = pkt_request.encode('utf-8')
 
+    # flush data
+    com_port.read(350)
+
     # write it
     com_port.write(pkt_request)
 
-    if(not pretty_print):
+    if(not pretty_print and not quiet):
         print("rd reg 0x", f'{addr:04x}', ": ", sep='', end='')
-    ReadBackReg(addr)
+    return ReadBackReg(addr)
 
 # Unused. I'll leave it here just for future reference of a neat solution
 def ReadCleanLine(file):
@@ -211,7 +220,8 @@ def RwRegs(cmd, len_cmd):
             print("Invalid value...")
             return
     elif(len_cmd == 1):
-        ReadReg(com_port, phy_addr, addr, ext)
+        pkt_reply = ReadReg(com_port, phy_addr, addr, ext)
+        PrintRegResult(addr, pkt_reply)
     else:
         print('Wrong number of args...')
 
@@ -235,7 +245,8 @@ def DumpRegs(cmd, len_cmd):
             return
 
     for my_addr in range(addr_start, addr_end+1):
-        ReadReg(com_port, phy_addr, my_addr, ext)
+        pkt_reply = ReadReg(com_port, phy_addr, my_addr, ext)
+        PrintRegResult(addr, pkt_reply)
 
 
 def Config(usr_data, len_usr_data):
@@ -282,7 +293,25 @@ def Config(usr_data, len_usr_data):
 def CmdDecision(cmd):
     len_cmd = len(cmd)
 
-    if(cmd[0] == "script"):
+    if(cmd[0] == "scan"):
+        print("Scanning for PHYs...")
+        for i in range(0, 16):
+            print("PHYID {}... ".format(i), end='')
+            pkt_reply = ReadReg(com_port, i, addr, ext, True)
+            if(pkt_reply[4] != 0x0a):
+                print("Invalid Reply")
+                continue
+            data_str = pkt_reply[0:4].decode('utf-8')
+            if(not data_str):
+                print("Invalid Data")
+                continue
+            if(data_str == "0000" or data_str == "FFFF"):
+                print("Not found")
+                continue
+            print("Found!")
+            if(phy_addr == -1):
+                phy_addr = i
+    elif(cmd[0] == "script"):
         try:
             path = cmd[1]
             print("Reading file:" + path )
@@ -316,7 +345,9 @@ def CmdDecision(cmd):
         else:
             print("Board didn't send any info (verbose)...")
     elif(cmd[0] == "config"):
-        Config(cmd, len_cmd)
+        Config(cmd, len_cmd)  
+    elif(cmd[0] == "phy"): # shortcut
+        Config(["config", cmd[0], cmd[1]], 3)
     elif(cmd[0] == "dump"):
         DumpRegs(cmd, len_cmd)
     elif(cmd[0] in ("exit", "exit()", "quit", "quit()", "q")):
@@ -371,7 +402,7 @@ elif(sys.argv[1] == "--help" or sys.argv[1] == "-h"):
     quit()
 elif(len_argv>=2):
     # ---------- Open COM Port ----------
-    com_port = serial.Serial(sys.argv[1], 9600, timeout=.1)
+    com_port = serial.Serial(sys.argv[1], 9600, timeout=.3)
 
     # ---------- Read board verbose ----------
     board_verbose = bytearray(b'')
@@ -394,7 +425,7 @@ elif(len_argv>=2):
     elif(len_argv==2):
         # ---------- Parse user inputs ----------
         while(1):
-            usr_data_raw = input("> ")
+            usr_data_raw = input("PHYID " + str(phy_addr) + " > ")
 
             usr_data = usr_data_raw.split()
             len_usr_data = len(usr_data)
