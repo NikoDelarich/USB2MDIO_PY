@@ -38,25 +38,30 @@ Usage: python3 usb2mdio.py <com_port> [script_file]
 A python alternative to TI's USB2MDIO tool.
 
 'script_file' can be in TI's format of USB2MDIO_PY's extended format.
-Check out the syntax here: https://github.com/AvatarBecker/USB2MDIO_PY
+Check out the syntax here: https://github.com/NikoDelarich/USB2MDIO_PY
 
 If no script is passed, a CLI opens, where the following commands are possible:
+
+Scan for PHYs & select first available:
+    scan
 
 Configure PHY access:
     Show current config:
         config
-    PHY address chosen with:
+    PHY address chosen with (Default -1):
         config phy <phy_address>
-    Extended register mode chosen with:
+    or just:
+        phy <phy_address>
+    Extended register mode chosen with (Default: Off):
         config ext <yes/no, y/n, Y/N, YES/NO, true/false, True/False, 1/0>
     Pretty print:
         config pretty <yes/no, y/n, Y/N, YES/NO, true/false, True/False, 1/0>
 
 Write register:
-    <reg> <value>   #Only HEX values without '0x' for now, e.g. ff
+    <reg> <value>   # Only HEX values without '0x' for now, e.g. ff
 
 Read register with:
-    <reg>           #Only HEX values without '0x' for now, e.g. ff
+    <reg>           # Only HEX values without '0x' for now, e.g. ff
 
 Show board verbose:
     info
@@ -87,7 +92,7 @@ Help:
 Quit:
     <exit, exit(), quit, quit(), q>
 
-For more documentation check https://github.com/AvatarBecker/USB2MDIO_PY
+For more documentation check https://github.com/NikoDelarich/USB2MDIO_PY
 """
 
 # ---------- Function definitions ----------
@@ -166,7 +171,7 @@ def WriteReg(com_port, phy_addr, addr, value, ext):
     com_port.write(pkt_request)
 
     # read back value and print it
-    print("wr reg 0x", f'{addr:04x}', ": ",  sep='', end='')
+    print("write 0x", f'{addr:04x}', ": ",  sep='', end='')
     pkt_reply = ReadBackReg(addr)
     PrintRegResult(addr, pkt_reply)
 
@@ -188,7 +193,7 @@ def ReadReg(com_port, phy_addr, addr, ext, quiet = False):
     com_port.write(pkt_request)
 
     if(not pretty_print and not quiet):
-        print("rd reg 0x", f'{addr:04x}', ": ", sep='', end='')
+        print("read 0x", f'{addr:04x}', ": ", sep='', end='')
     return ReadBackReg(addr)
 
 # Unused. I'll leave it here just for future reference of a neat solution
@@ -291,13 +296,15 @@ def Config(usr_data, len_usr_data):
         print("Pretty print: "+f'{pretty_print}')
 
 def CmdDecision(cmd):
+    global phy_addr
+
     len_cmd = len(cmd)
 
     if(cmd[0] == "scan"):
         print("Scanning for PHYs...")
         for i in range(0, 16):
             print("PHYID {}... ".format(i), end='')
-            pkt_reply = ReadReg(com_port, i, addr, ext, True)
+            pkt_reply = ReadReg(com_port, i, 0, ext, True)
             if(pkt_reply[4] != 0x0a):
                 print("Invalid Reply")
                 continue
@@ -308,9 +315,11 @@ def CmdDecision(cmd):
             if(data_str == "0000" or data_str == "FFFF"):
                 print("Not found")
                 continue
-            print("Found!")
             if(phy_addr == -1):
                 phy_addr = i
+                print("Found & selected!")
+            else:
+                print("Found!")
     elif(cmd[0] == "script"):
         try:
             path = cmd[1]
@@ -402,7 +411,7 @@ elif(sys.argv[1] == "--help" or sys.argv[1] == "-h"):
     quit()
 elif(len_argv>=2):
     # ---------- Open COM Port ----------
-    com_port = serial.Serial(sys.argv[1], 9600, timeout=.3)
+    com_port = serial.Serial(sys.argv[1], 9600, timeout=.05)
 
     # ---------- Read board verbose ----------
     board_verbose = bytearray(b'')
