@@ -122,6 +122,18 @@ def PrintRaw(str):
         print(hex(ord(char)), end=' ')
     print()
 
+def GetRegResult(pkt_reply):
+    if(pkt_reply[4] != 0x0a):
+        return [None, "Invalid reply..."]
+
+    data_str = pkt_reply[0:4].decode('utf-8')
+    if(data_str == None):
+        return [None, "No reply..."]
+    
+    #PrintRaw(data_str)
+    #data = int(pkt_reply[0:4], 16)
+    return ['0x' + data_str, None]
+
 def PrintRegResult(addr, pkt_reply):
     if(pkt_reply[4] == 0x0a):
         data_str = pkt_reply[0:4].decode('utf-8')
@@ -142,7 +154,7 @@ def PrintRegResult(addr, pkt_reply):
     else:
         print("Invalid reply...")
 
-def ReadBackReg(addr):
+def ReceiveRegReply(addr):
     while(1):
         pkt_reply = com_port.read(6)
         if(len(pkt_reply) == 6):
@@ -154,47 +166,72 @@ def ReadBackReg(addr):
     pkt_reply = bytes(pkt_reply)
     return pkt_reply
 
-def WriteReg(com_port, phy_addr, addr, value, ext):
-    # flush input (board keeps seding verbose)
-    #com_port.reset_input_buffer() # too slow
+def SendMspRequest(com_port, phy_addr, addr, ext, value = None):
+    global verbose
 
     # assemble COM message
-    pkt_request = f'{phy_addr:02d}{addr:04x}{value:04x}'+ext+'/'
-    #print(pkt_request+': ', end='')
-    #PrintRaw(pkt_request)
-    pkt_request = pkt_request.encode('utf-8')
-
-    # flush data
-    com_port.read(350)
-
-    # write it
-    com_port.write(pkt_request)
-
-    # read back value and print it
-    print("write 0x", f'{addr:04x}', ": ",  sep='', end='')
-    pkt_reply = ReadBackReg(addr)
-    PrintRegResult(addr, pkt_reply)
-
-def ReadReg(com_port, phy_addr, addr, ext, quiet = False):
+    if(value is None):
+        pkt_request = f'{phy_addr:02d}{addr:04x}'+ext+'/'
+    else:
+        pkt_request = f'{phy_addr:02d}{addr:04x}{value:04x}'+ext+'/'
+        
+    if(verbose == True):
+        print(pkt_request+': ', end='')
+        PrintRaw(pkt_request)
     
-    # flush input (board keeps seding verbose)
-    #com_port.reset_input_buffer() # too slow
+    # Send to MSP
+    com_port.write(pkt_request.encode('utf-8'))
 
-    # assemble COM message
-    pkt_request = f'{phy_addr:02d}{addr:04x}'+ext+'/'
-    #print(pkt_request+': ', end='')
-    #PrintRaw(pkt_request)
-    pkt_request = pkt_request.encode('utf-8')
+    return ReceiveRegReply(addr)
 
-    # flush data
-    com_port.read(350)
+def ReadWriteRegExtended(com_port, phy_addr, ext, addr, value = None):
+    REGCR = 0xD
+    ADDAR = 0xE
 
-    # write it
-    com_port.write(pkt_request)
+    mmd = (addr & 0xF000) >> 12
+    if(mmd == 0):
+        mmd = 0x1F
+    
+    # Select MMD
+    SendMspRequest(com_port, phy_addr, ext, REGCR, mmd)
+    
+    # Select address (TODO & 0xff ?)
+    SendMspRequest(com_port, phy_addr, ext, ADDAR, addr)
+    
+    # Perform operation
+    SendMspRequest(com_port, phy_addr, ext, REGCR, mmd & 0x4000) # Data, no increment
+
+    # Write value
+    if(value is not None):
+        SendMspRequest(com_port, phy_addr, ext, ADDAR, value)
+    
+    # Read (back) value
+    SendMspRequest(com_port, phy_addr, ext, ADDAR)
+
+    return ReceiveRegReply(ADDAR)
+
+def RegCmd(com_port, phy_addr, addr, value, ext, quiet = False):
+    com_port.read(350) # Flush
+
+    if(addr > 31):
+        pkt_reply = ReadWriteRegExtended(com_port, phy_addr, "=", addr, value)
+    else:
+        pkt_reply = SendMspRequest(com_port, phy_addr, ext, addr, value)
 
     if(not pretty_print and not quiet):
-        print("read 0x", f'{addr:04x}', ": ", sep='', end='')
-    return ReadBackReg(addr)
+        if(value is None):
+            print("read 0x", f'{addr:04x}', ": ", sep='', end='')
+        else:
+            print("write 0x", f'{addr:04x}', ": ",  sep='', end='')
+        PrintRegResult(addr, pkt_reply)
+
+    return pkt_reply
+
+def WriteReg(com_port, phy_addr, addr, value, ext, quiet = False):
+    return RegCmd(com_port, phy_addr, addr, value, ext, quiet)
+
+def ReadReg(com_port, phy_addr, addr, ext, quiet = False):
+    return RegCmd(com_port, phy_addr, addr, None, ext, quiet)
 
 # Unused. I'll leave it here just for future reference of a neat solution
 def ReadCleanLine(file):
@@ -225,8 +262,7 @@ def RwRegs(cmd, len_cmd):
             print("Invalid value...")
             return
     elif(len_cmd == 1):
-        pkt_reply = ReadReg(com_port, phy_addr, addr, ext)
-        PrintRegResult(addr, pkt_reply)
+        ReadReg(com_port, phy_addr, addr, ext)
     else:
         print('Wrong number of args...')
 
@@ -249,10 +285,10 @@ def DumpRegs(cmd, len_cmd):
             print("Bad argument...")
             return
 
+    # TODO this would be a good place to use indirect read with auto post increment
+    # But it may not be supported on all chips...
     for my_addr in range(addr_start, addr_end+1):
-        pkt_reply = ReadReg(com_port, phy_addr, my_addr, ext)
-        PrintRegResult(addr, pkt_reply)
-
+        ReadReg(com_port, phy_addr, my_addr, ext)
 
 def Config(usr_data, len_usr_data):
 
@@ -304,22 +340,30 @@ def CmdDecision(cmd):
         print("Scanning for PHYs...")
         for i in range(0, 16):
             print("PHYID {}... ".format(i), end='')
-            pkt_reply = ReadReg(com_port, i, 0, ext, True)
-            if(pkt_reply[4] != 0x0a):
-                print("Invalid Reply")
+            pkt_reply = ReadReg(com_port, i, 0x03, ext, quiet = True) # PHYIDR2
+            result = GetRegResult(pkt_reply)
+            if(result[0] is None):
+                print(result[1])
                 continue
-            data_str = pkt_reply[0:4].decode('utf-8')
-            if(not data_str):
-                print("Invalid Data")
-                continue
-            if(data_str == "0000" or data_str == "FFFF"):
+            if(result[0] == "0000" or result[0] == "FFFF"):
                 print("Not found")
                 continue
+
+            # TODO This is a bit lazy - we should check PHYIDR1 *and* 2 and ignore the revision bit
+            # DP83822:   PHYIDR1 (2): 0x2000, PHYIDR2 (3): 0xA240 --> OUI: 0x2000A24x
+            # DP83TD510: PHYIDR1 (2): 0x2000, PHYIDR2 (3): 0x0181 --> OUI: 0x2000018x
+            if(result[0] == "0A240"):
+                type = "DP83822"
+            elif(result[0] == "0A240"):
+                type = "DP83TD510"
+            else:
+                type = "Unknown"
+
             if(phy_addr == -1):
                 phy_addr = i
-                print("Found & selected!")
+                print(f'Found "{type}" & selected!')
             else:
-                print("Found!")
+                print(f'Found "{type}"!')
     elif(cmd[0] == "script"):
         try:
             path = cmd[1]
