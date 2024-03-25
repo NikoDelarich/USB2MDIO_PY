@@ -99,6 +99,7 @@ For more documentation check https://github.com/NikoDelarich/USB2MDIO_PY
 
 # TODO: make it a config class, with description, name, and value. Easens pretty print and feedback on change.
 pretty_print = False
+verbose = False
 phy_addr = -1   # this is a decimal value
 regs_dict = {}  # index reg struct with phy_addr
 
@@ -154,19 +155,25 @@ def PrintRegResult(addr, pkt_reply):
     else:
         print("Invalid reply...")
 
-def ReceiveRegReply(addr):
-    while(1):
+def ReceiveRegReply():
+    global verbose
+
+    for i in range(0, 50):
         pkt_reply = com_port.read(6)
         if(len(pkt_reply) == 6):
             break
-        time.sleep(0.05)
-    #PrintRaw(pkt_reply.decode('utf-8'))
+        time.sleep(0.01)
+    if(len(pkt_reply) != 6):
+        return None
+    
+    if(verbose == True):
+        print(pkt_reply.decode('utf-8'))
 
     pkt_reply = [i for i in pkt_reply if i != 0xd]   # for whatever reason, MSP sends a carriage return within reply for addr 0x1
     pkt_reply = bytes(pkt_reply)
     return pkt_reply
 
-def SendMspRequest(com_port, phy_addr, addr, ext, value = None):
+def SendMspRequest(com_port, phy_addr, ext, addr, value = None):
     global verbose
 
     # assemble COM message
@@ -177,12 +184,12 @@ def SendMspRequest(com_port, phy_addr, addr, ext, value = None):
         
     if(verbose == True):
         print(pkt_request+': ', end='')
-        PrintRaw(pkt_request)
+        #PrintRaw(pkt_request)
     
     # Send to MSP
     com_port.write(pkt_request.encode('utf-8'))
 
-    return ReceiveRegReply(addr)
+    return ReceiveRegReply()
 
 def ReadWriteRegExtended(com_port, phy_addr, ext, addr, value = None):
     REGCR = 0xD
@@ -199,16 +206,14 @@ def ReadWriteRegExtended(com_port, phy_addr, ext, addr, value = None):
     SendMspRequest(com_port, phy_addr, ext, ADDAR, addr)
     
     # Perform operation
-    SendMspRequest(com_port, phy_addr, ext, REGCR, mmd & 0x4000) # Data, no increment
+    SendMspRequest(com_port, phy_addr, ext, REGCR, mmd | 0x4000) # Data, no increment
 
     # Write value
     if(value is not None):
         SendMspRequest(com_port, phy_addr, ext, ADDAR, value)
     
     # Read (back) value
-    SendMspRequest(com_port, phy_addr, ext, ADDAR)
-
-    return ReceiveRegReply(ADDAR)
+    return SendMspRequest(com_port, phy_addr, ext, ADDAR)
 
 def RegCmd(com_port, phy_addr, addr, value, ext, quiet = False):
     com_port.read(350) # Flush
@@ -352,9 +357,9 @@ def CmdDecision(cmd):
             # TODO This is a bit lazy - we should check PHYIDR1 *and* 2 and ignore the revision bit
             # DP83822:   PHYIDR1 (2): 0x2000, PHYIDR2 (3): 0xA240 --> OUI: 0x2000A24x
             # DP83TD510: PHYIDR1 (2): 0x2000, PHYIDR2 (3): 0x0181 --> OUI: 0x2000018x
-            if(result[0] == "0A240"):
+            if(result[0] == "0xA240"):
                 type = "DP83822"
-            elif(result[0] == "0A240"):
+            elif(result[0] == "0x0181"):
                 type = "DP83TD510"
             else:
                 type = "Unknown"
@@ -455,7 +460,7 @@ elif(sys.argv[1] == "--help" or sys.argv[1] == "-h"):
     quit()
 elif(len_argv>=2):
     # ---------- Open COM Port ----------
-    com_port = serial.Serial(sys.argv[1], 9600, timeout=.05)
+    com_port = serial.Serial(sys.argv[1], 9600, timeout=.01)
 
     # ---------- Read board verbose ----------
     board_verbose = bytearray(b'')
